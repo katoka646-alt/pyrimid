@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSeedProduct, paymentRequirement } from '@/lib/seed-products';
+import { verifyPyrimidPaymentTx } from '@/lib/payment-verification';
 
 function paymentRequired(req: NextRequest, product: NonNullable<ReturnType<typeof getSeedProduct>>) {
   const requirement = paymentRequirement(product, req.url);
@@ -105,13 +106,28 @@ export async function GET(req: NextRequest, context: { params: Promise<{ product
     );
   }
 
-  const proof = req.headers.get('x-payment') || req.headers.get('x-payment-tx');
+  const proof = req.headers.get('x-payment-tx') || req.headers.get('x-payment');
   if (!proof) return paymentRequired(req, product);
+
+  const verification = await verifyPyrimidPaymentTx(proof, product.price_usdc);
+  if (!verification.valid) {
+    return NextResponse.json(
+      {
+        error: 'payment_invalid',
+        message: verification.reason || 'Payment could not be verified on Base',
+        docs: 'https://pyrimid.ai/quickstart',
+        proof: 'https://pyrimid.ai/proof',
+      },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } }
+    );
+  }
 
   return NextResponse.json({
     product_id: product.product_id,
     vendor_id: product.vendor_id,
-    payment_proof: proof.slice(0, 24),
+    payment_tx: verification.txHash,
+    payment_amount: verification.amount?.toString(),
+    buyer: verification.buyer,
     ...payload(product.product_id, req, proof),
     routed_by: 'pyrimid',
     links: {

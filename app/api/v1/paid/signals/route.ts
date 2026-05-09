@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CONTRACTS } from '@/lib/contracts';
+import { verifyPyrimidPaymentTx } from '@/lib/payment-verification';
 
 const PRICE_USDC = '0.25';
 const PRODUCT_ID = 'pragma-signal-snapshot';
@@ -43,15 +44,28 @@ function paymentRequired(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const proof = req.headers.get('x-payment') || req.headers.get('x-payment-tx');
+  const proof = req.headers.get('x-payment-tx') || req.headers.get('x-payment');
   if (!proof) return paymentRequired(req);
 
-  // Seed endpoint: accepts a payment proof header so buyer agents can complete the x402 loop.
-  // Full onchain verification is handled by the Pyrimid Router / reporting pipeline.
+  const verification = await verifyPyrimidPaymentTx(proof, 250000);
+  if (!verification.valid) {
+    return NextResponse.json(
+      {
+        error: 'payment_invalid',
+        message: verification.reason || 'Payment could not be verified on Base',
+        docs: 'https://pyrimid.ai/quickstart',
+        proof: 'https://pyrimid.ai/proof',
+      },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } }
+    );
+  }
+
   return NextResponse.json({
     product_id: PRODUCT_ID,
     vendor_id: VENDOR_ID,
-    payment_proof: proof.slice(0, 24),
+    payment_tx: verification.txHash,
+    payment_amount: verification.amount?.toString(),
+    buyer: verification.buyer,
     signal: {
       asset: 'BTC-PERP',
       timeframe: '4H',

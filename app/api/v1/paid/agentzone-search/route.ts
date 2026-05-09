@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CONTRACTS } from '@/lib/contracts';
+import { verifyPyrimidPaymentTx } from '@/lib/payment-verification';
 
 const PRICE_USDC = '0.05';
 const PRODUCT_ID = 'agentzone-trust-search';
@@ -43,8 +44,21 @@ function paymentRequired(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const proof = req.headers.get('x-payment') || req.headers.get('x-payment-tx');
+  const proof = req.headers.get('x-payment-tx') || req.headers.get('x-payment');
   if (!proof) return paymentRequired(req);
+
+  const verification = await verifyPyrimidPaymentTx(proof, 50000);
+  if (!verification.valid) {
+    return NextResponse.json(
+      {
+        error: 'payment_invalid',
+        message: verification.reason || 'Payment could not be verified on Base',
+        docs: 'https://pyrimid.ai/quickstart',
+        proof: 'https://pyrimid.ai/proof',
+      },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } }
+    );
+  }
 
   const q = req.nextUrl.searchParams.get('q') || 'agent commerce';
   const upstream = new URL('https://agentzone.fun/api/v1/search');
@@ -58,7 +72,9 @@ export async function GET(req: NextRequest) {
     product_id: PRODUCT_ID,
     vendor_id: VENDOR_ID,
     query: q,
-    payment_proof: proof.slice(0, 24),
+    payment_tx: verification.txHash,
+    payment_amount: verification.amount?.toString(),
+    buyer: verification.buyer,
     result: data,
     routed_by: 'pyrimid',
     links: {
